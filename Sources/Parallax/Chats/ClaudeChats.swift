@@ -13,6 +13,7 @@ struct ChatCopy: Codable, Hashable, Sendable {
     var cwd: String
     var createdAt: Double
     var lastActivityAt: Double
+    var lastTurnEdgeAt: Double?
     var stagedTranscriptPath: String?
     var lastFocusedAt: Double?
     var approvals = ChatApprovals()
@@ -23,6 +24,8 @@ struct ChatCopy: Codable, Hashable, Sendable {
     var worktreePath: String?
     var routine = false
 
+    /// Claude's Code sidebar sorts by this time.
+    var sidebarOrderAt: Double { lastTurnEdgeAt ?? lastActivityAt }
     var transcriptCwds: Set<String> { Set([cwd, originCwd, worktreePath].compactMap { $0 }) }
 }
 
@@ -143,7 +146,8 @@ struct Chat: Identifiable, Hashable, Sendable {
     var project: String { URL(fileURLWithPath: newest.cwd).lastPathComponent }
     var lastActivity: Date { Date(timeIntervalSince1970: newest.lastActivityAt / 1000) }
     var lastFocusedAt: Double? { copies.compactMap(\.lastFocusedAt).max() }
-    var lastInteractionAt: Double { max(newest.lastActivityAt, lastFocusedAt ?? 0) }
+    var sidebarOrderAt: Double { copies.map(\.sidebarOrderAt).max() ?? 0 }
+    var sidebarOrder: Date { Date(timeIntervalSince1970: sidebarOrderAt / 1000) }
 }
 
 /// What continuing a chat in a space will do.
@@ -172,6 +176,7 @@ struct ChatTransfer: Sendable {
     var transcript: Data
     var lastFocusedAt: Double?
     var lastActivityAt: Double = 0
+    var sidebarOrderAt: Double = 0
     var targetConfig: URL
     var approvals: ChatApprovals
     var promoteTranscript = false
@@ -208,7 +213,7 @@ enum ChatError: LocalizedError {
 /// Disposable memo of syncs that changed nothing. Deleting it only causes a full re-check.
 struct ChatSyncCache: Codable, Sendable {
     /// Bump when prepare, apply, or normalization decisions change.
-    static let logicVersion = 4
+    static let logicVersion = 5
     static let currentVersion: String? = (Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String)
         .map { "\(logicVersion)-\($0)" }
     var version = ChatSyncCache.currentVersion ?? ""
@@ -287,7 +292,7 @@ enum ClaudeChats {
             }
         }
         return merged.map { Chat(id: $0.key, copies: $0.value) }.sorted {
-            if $0.lastInteractionAt != $1.lastInteractionAt { return $0.lastInteractionAt > $1.lastInteractionAt }
+            if $0.sidebarOrderAt != $1.sidebarOrderAt { return $0.sidebarOrderAt > $1.sidebarOrderAt }
             return $0.id < $1.id
         }
     }
@@ -388,6 +393,7 @@ enum ClaudeChats {
             cwd: cwd,
             createdAt: (object["createdAt"] as? NSNumber)?.doubleValue ?? 0,
             lastActivityAt: (object["lastActivityAt"] as? NSNumber)?.doubleValue ?? 0,
+            lastTurnEdgeAt: (object["lastTurnEdgeAt"] as? NSNumber)?.doubleValue,
             stagedTranscriptPath: object["stagedTranscriptPath"] as? String,
             lastFocusedAt: (object["lastFocusedAt"] as? NSNumber)?.doubleValue,
             approvals: ChatApprovals(record: object),
@@ -1006,6 +1012,7 @@ enum ClaudeChats {
         )
         transfer.sourceTranscript = sourceURL
         transfer.lastActivityAt = copies[0].lastActivityAt
+        transfer.sidebarOrderAt = chat.sidebarOrderAt
         transfer.lineage = existing.flatMap { $0.lineage.present ? $0.lineage : nil }
             ?? (copies.filter { !$0.imported } + copies).first { $0.lineage.json != nil }?.lineage ?? ChatLineage()
         guard let existing else {
@@ -1027,9 +1034,10 @@ enum ClaudeChats {
             if existing.cwd != source.cwd { transfer.approvals = existing.approvals }
             else if existing.approvals.trusted { transfer.approvals.trusted = true }
             transfer.promoteTranscript = transfer.approvals.trusted && existing.stagedTranscriptPath != nil
-            // Claude orders the sidebar by activity time alone, so every copy keeps the newest.
+            // Every copy keeps the newest activity and sidebar order times; focus doesn't affect the order.
             return existing.approvals == transfer.approvals && existing.lineage == transfer.lineage
-                && !transfer.promoteTranscript && existing.lastActivityAt >= transfer.lastActivityAt ? .upToDate : .updateMetadata
+                && !transfer.promoteTranscript && existing.lastActivityAt >= transfer.lastActivityAt
+                && existing.sidebarOrderAt >= transfer.sidebarOrderAt ? .upToDate : .updateMetadata
         }
         if existing == source {
             transfer.kind = currentKind()
@@ -1081,9 +1089,6 @@ enum ClaudeChats {
             keys += ["rewindEdges", "transcriptCuts", "transcriptModelStates"]
         }
         for key in keys where destination[key] != nil && !(destination[key] is NSNull) { record[key] = destination[key] }
-        record["lastActivityAt"] = max(transfer.source.lastActivityAt, transfer.lastActivityAt,
-                                       (destination["lastActivityAt"] as? NSNumber)?.doubleValue ?? 0)
-        record["lastFocusedAt"] = [transfer.lastFocusedAt, (destination["lastFocusedAt"] as? NSNumber)?.doubleValue].compactMap { $0 }.max()
         if ["user", "tool"].contains(destination["titleSource"] as? String ?? ""),
            !["user", "tool"].contains(transfer.source.titleSource ?? "") {
             record["title"] = destination["title"] as? String
@@ -1097,6 +1102,15 @@ enum ClaudeChats {
             if !prior.contains(cli) { prior.append(cli) }
             record["priorCliSessionIds"] = prior
         }
+    }
+
+    private static func mergeTimes(_ destination: [String: Any]?, into record: inout [String: Any], transfer: ChatTransfer) {
+        let activity = (destination?["lastActivityAt"] as? NSNumber)?.doubleValue ?? 0
+        let lastActivity = max(transfer.source.lastActivityAt, transfer.lastActivityAt, activity)
+        let order = max(transfer.sidebarOrderAt, (destination?["lastTurnEdgeAt"] as? NSNumber)?.doubleValue ?? activity)
+        record["lastActivityAt"] = lastActivity
+        if order != lastActivity || record["lastTurnEdgeAt"] != nil { record["lastTurnEdgeAt"] = order }
+        record["lastFocusedAt"] = [transfer.lastFocusedAt, (destination?["lastFocusedAt"] as? NSNumber)?.doubleValue].compactMap { $0 }.max()
     }
 
     /// Preserve native-only lines on extensions, and never shorten a file already containing these messages.
@@ -1145,17 +1159,14 @@ enum ClaudeChats {
         if transfer.kind == .updateMetadata {
             guard let destination else { throw ChatError.unreadableTarget }
             record = destination
-            record["lastActivityAt"] = max(transfer.lastActivityAt, (destination["lastActivityAt"] as? NSNumber)?.doubleValue ?? 0)
-            record["lastFocusedAt"] = [transfer.lastFocusedAt, (destination["lastFocusedAt"] as? NSNumber)?.doubleValue].compactMap { $0 }.max()
         } else {
             record = ["cliSessionId": source.cliSessionID, "createdAt": source.createdAt, "cwd": source.cwd,
                       "importedFrom": "local-1p-code", "isArchived": false,
-                      "lastActivityAt": max(source.lastActivityAt, transfer.lastActivityAt),
                       "originCwd": source.originCwd ?? source.cwd, "sessionId": source.sessionID]
             if let title = source.title { record["title"] = title; record["titleSource"] = source.titleSource }
-            record["lastFocusedAt"] = transfer.lastFocusedAt
             if let destination { mergeOwnKeys(destination, into: &record, transfer: transfer) }
         }
+        mergeTimes(destination, into: &record, transfer: transfer)
         let tombstone = transfer.targetNamespace.appendingPathComponent("deleted_" + transfer.chatID.dropFirst("local_".count))
         guard !manager.fileExists(atPath: tombstone.path) else { throw ChatError.removedInTarget }
         if transfer.kind == .add {

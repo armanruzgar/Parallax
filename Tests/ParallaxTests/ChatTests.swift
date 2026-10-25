@@ -223,10 +223,10 @@ final class ChatTests: ChatFixture {
         XCTAssertEqual(result.transferred, 2)
         XCTAssertNil(result.summary)
         let chats = ClaudeChats.scan([c])
-        XCTAssertEqual(chats.map(\.id), [chatID, "local_second"], "Opening an older chat brings it above a newer message")
-        XCTAssertEqual(chats[0].newest.lastActivityAt, 200, "Message selection still follows transcript freshness")
-        XCTAssertEqual(chats[0].newest.lastFocusedAt, 500, "Recency comes from any of the three accounts")
-        let transcript = try XCTUnwrap(try ClaudeChats.transcriptURL(for: chats[0].newest, in: c))
+        XCTAssertEqual(chats.map(\.id), ["local_second", chatID], "A newer message sorts above a recently focused chat")
+        XCTAssertEqual(chats[1].newest.lastActivityAt, 200, "Message selection still follows transcript freshness")
+        XCTAssertEqual(chats[1].newest.lastFocusedAt, 500, "Recency comes from any of the three accounts")
+        let transcript = try XCTUnwrap(try ClaudeChats.transcriptURL(for: chats[1].newest, in: c))
         XCTAssertTrue(try String(contentsOf: transcript, encoding: .utf8).contains("new"))
     }
 

@@ -55,7 +55,7 @@ struct ChatsView: View {
         List(filtered, selection: $selectedChatID) { chat in
             VStack(alignment: .leading, spacing: 3) {
                 Text(chat.title).lineLimit(2)
-                Text("\(chat.project) · \(chat.lastActivity, format: .relative(presentation: .named))")
+                Text("\(chat.project) · \(chat.sidebarOrder, format: .relative(presentation: .named))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
