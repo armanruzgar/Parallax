@@ -67,6 +67,17 @@ enum ClaudeProvider {
         return status
     }
 
+    /// The account signed in to a Claude space's Code tab, from its own `.claude.json`.
+    static func signedInEmail(configFolder: URL) -> String? {
+        guard let data = try? Data(contentsOf: configFolder.appendingPathComponent(".claude.json")),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let account = object["oauthAccount"] as? [String: Any],
+              let email = (account["emailAddress"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !email.isEmpty
+        else { return nil }
+        return email
+    }
+
     static func renewal(configFolder: URL, now: Date) -> (date: Date, estimated: Bool)? {
         guard let data = try? Data(contentsOf: configFolder.appendingPathComponent(".claude.json")),
               let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],

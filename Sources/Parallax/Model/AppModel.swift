@@ -57,6 +57,8 @@ final class AppModel {
     var lastSync: (date: Date, result: ClaudeChats.SyncResult)?
     /// Disk use per space, filled in when the Storage page measures it.
     var storage: [UUID: SpaceStorage] = [:]
+    /// The account each Claude space is signed in to, read from its data folder.
+    var detectedEmails: [UUID: String] = [:]
     var backupStorage: Int64?
     private(set) var terminationRequested = false
     var notice: String?
@@ -378,6 +380,7 @@ final class AppModel {
     // MARK: Running instances
 
     func refreshRunning() {
+        refreshDetectedEmails()
         running = running.filter { !hooks.isTerminated($0.value) }
         for (spaceID, instance) in hooks.discoverRunningSpaces(apps) where running[spaceID] == nil && !hooks.isTerminated(instance) {
             running[spaceID] = instance
@@ -666,14 +669,33 @@ final class AppModel {
 
     // MARK: Usage accounts
 
+    /// Reads which account each Claude space is signed in to, so its usage shows without typing the email.
+    func refreshDetectedEmails() {
+        var detected: [UUID: String] = [:]
+        for (_, space) in claudeSpaces {
+            if let email = ClaudeProvider.signedInEmail(configFolder: ClaudeChats.folders(for: space).config) { detected[space.id] = email }
+        }
+        if detected != detectedEmails { detectedEmails = detected }
+    }
+
+    /// The account a space is signed in to, falling back to the email saved on the space.
+    func email(for space: Space) -> String {
+        detectedEmails[space.id] ?? space.email.trimmingCharacters(in: .whitespaces)
+    }
+
+    func account(for space: Space, in app: ManagedApp) -> UsageAccount? {
+        account(forEmail: email(for: space), provider: app.kind == .claude ? .claude : app.kind == .codex ? .codex : nil)
+    }
+
     func account(forEmail email: String, provider: Provider? = nil) -> UsageAccount? {
         let wanted = email.trimmingCharacters(in: .whitespaces).lowercased()
         guard !wanted.isEmpty else { return nil }
         return accounts.first { $0.email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() == wanted && (provider == nil || $0.provider == provider) }
     }
 
-    func addAccount(provider: Provider, label: String) async {
-        let account = UsageAccount(provider: provider, label: label.isEmpty ? "\(provider.label) account" : label)
+    /// `email` is the account expected to sign in; sign-in replaces it with the one that actually did.
+    func addAccount(provider: Provider, label: String, email: String = "") async {
+        let account = UsageAccount(provider: provider, label: label.isEmpty ? "\(provider.label) account" : label, email: email)
         accounts.append(account)
         save()
         await signIn(account.id)

@@ -19,7 +19,8 @@ struct SpaceEditor: View {
             Text("Edit Space").font(.title2.weight(.semibold))
             Form {
                 TextField("Name", text: $draft.name)
-                TextField("Account email", text: $draft.email)
+                TextField("Account email", text: $draft.email,
+                          prompt: model.detectedEmails[draft.id].map { Text("\($0), read from the space") })
                 TextField("Extra launch arguments", text: $draft.arguments)
                     .font(.body.monospaced())
                 VStack(alignment: .leading, spacing: 4) {

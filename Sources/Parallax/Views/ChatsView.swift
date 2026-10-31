@@ -86,7 +86,7 @@ struct ChatsView: View {
                                 Text(pair.space.name)
                                 Text(status(chat, in: pair.space.id)).font(.caption).foregroundStyle(.secondary)
                             }
-                            if let account = model.account(forEmail: pair.space.email, provider: .claude) { UsageBadge(account: account) }
+                            if let account = model.account(for: pair.space, in: pair.app) { UsageBadge(account: account) }
                             Spacer()
                             if preparing == pair.space.id { ProgressView().controlSize(.small) }
                             Button("Continue Here") { start(chat, in: pair.space.id) }

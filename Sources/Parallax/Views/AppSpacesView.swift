@@ -66,6 +66,7 @@ struct AppSpacesView: View {
             .padding(28)
         }
         .navigationTitle(app.name)
+        .onAppear { model.refreshDetectedEmails() }
         .sheet(isPresented: $addingSpace) {
             NewSpaceSheet(model: model, app: app)
         }
@@ -221,13 +222,14 @@ private struct SpaceRow: View {
     var body: some View {
         HStack(spacing: 12) {
             RunningDot(running: isRunning)
+            let email = model.email(for: space)
             VStack(alignment: .leading, spacing: 2) {
                 Text(space.name).font(.body.weight(.medium))
-                Text(space.email.isEmpty ? "No account email set" : space.email)
+                Text(email.isEmpty ? (app.kind == .claude ? "Not signed in yet" : "No account email set") : email)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            if let account = model.account(forEmail: space.email, provider: app.kind == .claude ? .claude : app.kind == .codex ? .codex : nil) { UsageBadge(account: account) }
+            usage(email: email)
             Spacer()
             if isRunning {
                 if app.kind == .claude {
@@ -261,6 +263,34 @@ private struct SpaceRow: View {
         }
         .padding(.vertical, 6)
     }
+
+    /// The account's usage, or the one step that gets it showing here.
+    @ViewBuilder
+    private func usage(email: String) -> some View {
+        let provider: Provider? = app.kind == .claude ? .claude : app.kind == .codex ? .codex : nil
+        if let provider, !email.isEmpty {
+            if let account = model.account(forEmail: email, provider: provider) {
+                if model.signingIn.contains(account.id) {
+                    ProgressView().controlSize(.small)
+                    Text("Finish signing in in your browser…").font(.caption).foregroundStyle(.secondary)
+                    Button("Cancel") { model.cancelSignIn(account.id) }.controlSize(.small)
+                } else if account.signedIn {
+                    UsageBadge(account: account)
+                } else {
+                    Button("Sign In for Usage") { Task { await model.signIn(account.id) } }
+                        .controlSize(.small)
+                        .disabled(model.busyAccounts.contains(account.id))
+                        .help("Usage uses its own command-line login, separate from the space. Sign in as \(email).")
+                        .accessibilityLabel("Sign in for usage of \(space.name)")
+                }
+            } else {
+                Button("Track Usage") { Task { await model.addAccount(provider: provider, label: space.name, email: email) } }
+                    .controlSize(.small)
+                    .help("Adds \(email) to the Usage page. Usage uses its own command-line login, separate from the space, so sign in as \(email).")
+                    .accessibilityLabel("Track usage of \(space.name)")
+            }
+        }
+    }
 }
 
 private struct NewSpaceSheet: View {
@@ -280,7 +310,7 @@ private struct NewSpaceSheet: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
             TextField("Name, for example Work", text: $name).textFieldStyle(.roundedBorder)
-            TextField("Account email (optional, shows its usage here)", text: $email).textFieldStyle(.roundedBorder)
+            TextField(app.kind == .claude ? "Account email (optional, read from the space once you sign in)" : "Account email (optional, shows its usage here)", text: $email).textFieldStyle(.roundedBorder)
             if app.kind == .codex && !codexAccounts.isEmpty {
                 Picker("Sign-in", selection: $codexAccountID) {
                     Text("Sign in inside Codex").tag(UUID?.none)

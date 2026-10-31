@@ -91,7 +91,7 @@ cd Parallax
 1. Click **+** in the sidebar and choose an app, for example Claude or ChatGPT.
 2. Click **New Space** for each account, open it, and sign in inside the app.
 3. For Claude, open the Code tab once in each new space, then open the space again through Parallax to bring in your chats.
-4. On the Usage page, click **Add Account** and sign in to each account you want to track.
+4. Click **Track Usage** next to a space (Claude spaces know which account they're signed in to) and sign in to that account once more, or add accounts on the Usage page.
 
 ## Where Parallax keeps things
 
