@@ -28,7 +28,8 @@ final class StagingTests: ChatFixture {
         try editRecord(a) { $0.removeValue(forKey: "importedFrom") }
         XCTAssertEqual(ClaudeChats.syncAll(to: b, spaces: [a, b], backups: backups).transferred, 1)
         XCTAssertFalse(FileManager.default.fileExists(atPath: staged.deletingLastPathComponent().path))
-        XCTAssertEqual(try Data(contentsOf: native(b)), bytes)
+        XCTAssertNotEqual(try Data(contentsOf: native(a)), bytes)
+        XCTAssertEqual(try Data(contentsOf: native(b)), try Data(contentsOf: native(a)), "A trusted copy is the source's own file")
         XCTAssertEqual(try savedFiles().count, 1)
         XCTAssertEqual(try savedFiles().first?.pathExtension, "json")
     }

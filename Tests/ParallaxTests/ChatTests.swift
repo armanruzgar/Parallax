@@ -66,12 +66,41 @@ final class ChatTests: ChatFixture {
         try ClaudeChats.apply(transfer(to: b, spaces: [a, b, c]), backups: backups)
         try ClaudeChats.apply(transfer(to: c, spaces: [a, b, c]), backups: backups)
 
-        // A's own file keeps its session ids, so B's copy differs from it; C's copy equals B's and is cloned from it.
-        XCTAssertNotEqual(try Data(contentsOf: native(a)), try Data(contentsOf: native(b)))
-        XCTAssertEqual(try Data(contentsOf: native(b)), try Data(contentsOf: native(c)))
-        XCTAssertEqual(try XCTUnwrap(Housekeeping.firstBlock(native(b))), Housekeeping.firstBlock(native(c)))
+        // Each copy is A's file as Claude wrote it, cloned, so the three take the disk space of one.
+        XCTAssertTrue(try String(contentsOf: native(a), encoding: .utf8).contains("sessionId"))
+        XCTAssertEqual(try Data(contentsOf: native(a)), try Data(contentsOf: native(b)))
+        XCTAssertEqual(try Data(contentsOf: native(a)), try Data(contentsOf: native(c)))
+        XCTAssertEqual(try XCTUnwrap(Housekeeping.firstBlock(native(a))), Housekeeping.firstBlock(native(b)))
+        XCTAssertEqual(Housekeeping.firstBlock(native(a)), Housekeeping.firstBlock(native(c)))
         XCTAssertEqual(try FileManager.default.attributesOfItem(atPath: native(c).path)[.posixPermissions] as? Int, 0o600)
         XCTAssertEqual(try transfer(to: c, spaces: [a, b, c]).kind, .upToDate)
+    }
+
+    func testCopyCarriedByAnEarlierVersionBecomesACloneWhenTheChatGrows() throws {
+        let a = space("A"), b = space("B")
+        try writeNativeChat(in: a, lines: [line("user", "hi"), line("assistant", "hello")], lastActivity: 200)
+        try writeNativeChat(in: b, lines: [line("user", "hi")], lastActivity: 100)
+        // Earlier versions wrote carried copies without session ids.
+        try ClaudeChats.normalizedTranscript(Data(contentsOf: native(b)), cwds: [cwd]).write(to: native(b))
+
+        try ClaudeChats.apply(transfer(to: b, spaces: [a, b]), backups: backups)
+        XCTAssertEqual(try Data(contentsOf: native(b)), try Data(contentsOf: native(a)))
+        XCTAssertEqual(try XCTUnwrap(Housekeeping.firstBlock(native(a))), Housekeeping.firstBlock(native(b)))
+        XCTAssertTrue(try savedFiles().allSatisfy { $0.pathExtension == "json" }, "Nothing of B's was lost, so only its record is saved")
+        XCTAssertEqual(try transfer(to: b, spaces: [a, b]).kind, .upToDate)
+    }
+
+    func testTargetLinesTheSourceLacksAreKeptInsteadOfCloning() throws {
+        let a = space("A"), b = space("B")
+        try writeNativeChat(in: a, lines: [line("user", "hi"), line("assistant", "hello")], lastActivity: 200)
+        try writeNativeChat(in: b, lines: [line("user", "hi"), #"{"type":"summary","summary":"only in B"}"#], lastActivity: 100)
+        let own = try Data(contentsOf: native(b))
+
+        try ClaudeChats.apply(transfer(to: b, spaces: [a, b]), backups: backups)
+        let written = try Data(contentsOf: native(b))
+        XCTAssertTrue(ClaudeChats.hasPrefix(written, own))
+        XCTAssertTrue(String(decoding: written, as: UTF8.self).contains("hello"))
+        XCTAssertEqual(try transfer(to: b, spaces: [a, b]).kind, .upToDate)
     }
 
     func testOlderCopyIsUpdatedAndDivergedCopyIsBackedUp() throws {
@@ -288,7 +317,7 @@ final class ChatTests: ChatFixture {
         XCTAssertNil(record["spawnSeed"])
         XCTAssertNil(record["stagedTranscriptPath"])
         let native = b.config.appendingPathComponent("projects/-work-project/" + cli + ".jsonl")
-        XCTAssertEqual(try Data(contentsOf: native), try ClaudeChats.normalizedTranscript(Data((line("user", "hi") + "\n").utf8), cwds: [cwd]))
+        XCTAssertEqual(try Data(contentsOf: native), Data((line("user", "hi") + "\n").utf8))
 
         // Updating this approved chat must keep it resumable without another import prompt.
         try writeNativeChat(in: a, lines: [line("user", "hi"), line("assistant", "new")], lastActivity: 200,

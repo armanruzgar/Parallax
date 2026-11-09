@@ -62,8 +62,9 @@ final class CarryTests: ChatFixture {
         try raw.write(to: native(b))
         let prepared = try transfer(to: b, spaces: [a, b])
         try ClaudeChats.apply(prepared, backups: backups)
-        XCTAssertEqual(try Data(contentsOf: native(b)), prepared.transcript)
-        XCTAssertTrue(try savedFiles().contains { (try? Data(contentsOf: $0)) == raw })
+        // The cut-off line is the start of A's file, so nothing of B's is lost and only its record is saved.
+        XCTAssertEqual(try Data(contentsOf: native(b)), try Data(contentsOf: native(a)))
+        XCTAssertTrue(try savedFiles().allSatisfy { $0.pathExtension == "json" })
     }
 
     func testRewoundChatStillSyncsInBulkAndReportsBackupAsNote() throws {
@@ -88,7 +89,8 @@ final class CarryTests: ChatFixture {
         _ = try namespace(b)
         XCTAssertEqual(ClaudeChats.syncAll(to: b, spaces: [a, b], backups: backups).transferred, 1)
         let output = try String(contentsOf: native(b), encoding: .utf8)
-        XCTAssertTrue(output.contains("inherited")); XCTAssertTrue(output.contains("new")); XCTAssertFalse(output.contains("sessionId"))
+        XCTAssertTrue(output.contains("inherited")); XCTAssertTrue(output.contains("new"))
+        XCTAssertEqual(output, try String(contentsOf: native(a), encoding: .utf8), "The parent's lines stay as Claude wrote them")
     }
 
     func testForkIntoAnotherFolderBeforeItsFirstMessageIsCarried() throws {

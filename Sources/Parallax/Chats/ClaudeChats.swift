@@ -215,7 +215,7 @@ enum ChatError: LocalizedError {
 /// Disposable memo of syncs that changed nothing. Deleting it only causes a full re-check.
 struct ChatSyncCache: Codable, Sendable {
     /// Bump when prepare, apply, or normalization decisions change.
-    static let logicVersion = 5
+    static let logicVersion = 6
     static let currentVersion: String? = (Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String)
         .map { "\(logicVersion)-\($0)" }
     var version = ChatSyncCache.currentVersion ?? ""
@@ -1114,16 +1114,32 @@ enum ClaudeChats {
     }
 
     /// Preserve native-only lines on extensions, and never shorten a file already containing these messages.
-    private static func nativeBytes(_ transcript: Data, at url: URL, cwds: Set<String>) -> Data? {
+    /// `original` is the source file as Claude wrote it, which normalizes to `transcript`. It is written whole when the
+    /// target keeps no lines of its own, so the target's file is a clone of the source's and takes no disk space.
+    /// `keepsNothing` is set when the replaced file holds only lines the new one has too.
+    private static func nativeBytes(_ transcript: Data, original: Data?, at url: URL, cwds: Set<String>,
+                                    keepsNothing: inout Bool) -> Data? {
         guard fileType(url, followingLinks: true) == S_IFREG, let raw = try? Data(contentsOf: url),
-              let normalized = try? normalizedTranscript(raw, cwds: cwds) else { return transcript }
+              let normalized = try? normalizedTranscript(raw, cwds: cwds) else { return original ?? transcript }
         if hasPrefix(normalized, transcript) { return nil }
         if hasPrefix(transcript, normalized), raw.isEmpty || raw.last == 0x0A {
+            // Every line of the target survives normalization, so the source's file has each of them.
+            if let original, hasPrefix(original, raw) || lineRanges(raw).count == lineRanges(normalized).count {
+                keepsNothing = true
+                return original
+            }
             var extended = raw
             extended.append(transcript.dropFirst(normalized.count))
             return extended
         }
-        return transcript
+        return original ?? transcript
+    }
+
+    /// The source file's own bytes, when they are whole lines that still normalize to what was prepared.
+    private static func originalBytes(_ transfer: ChatTransfer) -> Data? {
+        guard let url = transfer.sourceTranscript, let raw = try? Data(contentsOf: url), raw.last == 0x0A,
+              (try? normalizedTranscript(raw, cwds: transfer.source.transcriptCwds)) == transfer.transcript else { return nil }
+        return raw
     }
 
     /// Never carry into Claude's default profile, even through a saved symlink override.
@@ -1183,6 +1199,7 @@ enum ClaudeChats {
         guard !writesTranscript || !transfer.transcript.isEmpty else { throw ChatError.transcriptMissing }
         let transcriptURL: URL?
         let transcriptBytes: Data?
+        var keepsNothing = false
         if transfer.approvals.trusted {
             guard let cwd = record["cwd"] as? String, let cli = record["cliSessionId"] as? String else { throw ChatError.unsupported }
             let projects = transfer.targetConfig.appendingPathComponent("projects").standardizedFileURL.resolvingSymlinksInPath()
@@ -1195,7 +1212,10 @@ enum ClaudeChats {
                 transcriptURL = writesTranscript ? try nativeTranscriptURL(config: transfer.targetConfig, cwd: cwd, cliSessionID: cli) : nil
             }
             let cwds = source.transcriptCwds.union(["cwd", "originCwd", "worktreePath"].compactMap { destination?[$0] as? String })
-            transcriptBytes = transcriptURL.flatMap { nativeBytes(transfer.transcript, at: $0, cwds: cwds) }
+            let original = transcriptURL == nil ? nil : originalBytes(transfer)
+            transcriptBytes = transcriptURL.flatMap {
+                nativeBytes(transfer.transcript, original: original, at: $0, cwds: cwds, keepsNothing: &keepsNothing)
+            }
             record.removeValue(forKey: "stagedTranscriptPath")
         } else if writesTranscript {
             let digest = SHA256.hash(data: transfer.transcript).map { String(format: "%02x", $0) }.joined()
@@ -1229,6 +1249,9 @@ enum ClaudeChats {
                 // Compare against exactly what will be written, including retained native-only lines.
                 if file != transfer.targetRecord, let transcriptBytes,
                    let old = try? Data(contentsOf: file), hasPrefix(transcriptBytes, old) { continue }
+                // Nor one whose lines are all among the carried messages, such as the staged copy being promoted.
+                if file != transfer.targetRecord, (keepsNothing && file == transcriptURL)
+                    || (try? Data(contentsOf: file)).map({ hasPrefix(transfer.transcript, $0) }) == true { continue }
                 var backup = folder.appendingPathComponent(file.lastPathComponent)
                 if manager.fileExists(atPath: backup.path) { backup = folder.appendingPathComponent("native-" + file.lastPathComponent) }
                 try manager.copyItem(at: file, to: backup)
