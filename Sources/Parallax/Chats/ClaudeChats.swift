@@ -184,6 +184,8 @@ struct ChatTransfer: Sendable {
     var targetHasOwnMessages = false
     var extendsTarget = false
     var sourceTranscript: URL?
+    /// Every space's file for this chat. One that already holds the bytes to write is cloned instead of copied.
+    var cloneSources: [URL] = []
 
     func needsReconfirmation(after old: ChatTransfer, blockers: [pid_t]) -> Bool {
         (kind == .replaceDiverged && old.kind != .replaceDiverged) || !blockers.isEmpty
@@ -1008,6 +1010,7 @@ enum ClaudeChats {
             targetConfig: target.config, approvals: approvals
         )
         transfer.sourceTranscript = sourceURL
+        transfer.cloneSources = [sourceURL] + uses.keys.map(\.url).filter { $0 != sourceURL }.sorted { $0.path < $1.path }
         transfer.lastActivityAt = copies[0].lastActivityAt
         transfer.sidebarOrderAt = chat.sidebarOrderAt
         transfer.lineage = existing.flatMap { $0.lineage.present ? $0.lineage : nil }
@@ -1142,6 +1145,8 @@ enum ClaudeChats {
         }
         guard safeIdentifier(transfer.source.sessionID), safeIdentifier(transfer.source.cliSessionID),
               transfer.chatID == transfer.source.sessionID else { throw ChatError.unsupported }
+        Housekeeping.rewriteLock.lock()
+        defer { Housekeeping.rewriteLock.unlock() }
         let manager = FileManager.default
         let source = transfer.source
         var destination: [String: Any]?
@@ -1232,7 +1237,7 @@ enum ClaudeChats {
         if let transcriptURL, let transcriptBytes {
             try manager.createDirectory(at: transcriptURL.deletingLastPathComponent(), withIntermediateDirectories: true,
                                         attributes: [.posixPermissions: 0o700])
-            try writeAtomically(transcriptBytes, to: transcriptURL, cloning: transfer.sourceTranscript)
+            try writeAtomically(transcriptBytes, to: transcriptURL, cloning: transfer.cloneSources)
         }
         if transfer.approvals.trusted, let transcriptURL { copySubagents(transfer, to: transcriptURL) }
         let data = try JSONSerialization.data(withJSONObject: record, options: [.sortedKeys, .withoutEscapingSlashes])
@@ -1352,10 +1357,18 @@ enum ClaudeChats {
         return project.appendingPathComponent(cliSessionID + ".jsonl")
     }
 
-    /// When `source` already holds exactly `data`, the file is an APFS clone of it, sharing disk blocks until either changes.
-    private static func writeAtomically(_ data: Data, to url: URL, cloning source: URL? = nil) throws {
+    /// When one of `sources` already holds exactly `data`, the file is an APFS clone of it, sharing disk blocks until either changes.
+    /// A carried copy rarely equals the chat's original file, but it does equal the copies already carried to other spaces.
+    private static func writeAtomically(_ data: Data, to url: URL, cloning sources: [URL] = []) throws {
         let temporary = url.deletingLastPathComponent().appendingPathComponent(".\(UUID().uuidString).tmp")
-        if let source, (try? Data(contentsOf: source)) == data, clonefile(source.path, temporary.path, 0) == 0 {
+        let destination = url.standardizedFileURL.resolvingSymlinksInPath()
+        let source = sources.first { source in
+            var info = stat()
+            return source.standardizedFileURL.resolvingSymlinksInPath() != destination
+                && stat(source.path, &info) == 0 && info.st_mode & S_IFMT == S_IFREG && Int(info.st_size) == data.count
+                && (try? Data(contentsOf: source)) == data
+        }
+        if let source, clonefile(source.path, temporary.path, 0) == 0 {
             // The source may have changed between the read and the clone.
             guard (try? Data(contentsOf: temporary)) == data, chmod(temporary.path, 0o600) == 0 else {
                 try? FileManager.default.removeItem(at: temporary)

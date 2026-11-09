@@ -215,16 +215,20 @@ final class AppModel {
         }
     }
 
-    /// Prunes old chat backups and stale caches of Claude spaces that aren't open.
+    /// Prunes old chat backups and stale caches of Claude spaces that aren't open, and shares their identical files.
     @discardableResult
     func cleanUpLeftovers() -> Task<Void, Never> {
         refreshRunning()
         let backups = backupsURL, now = now()
-        let idle = apps.filter { $0.kind == .claude }.flatMap(\.spaces).filter { running[$0.id] == nil }
-            .map { URL(fileURLWithPath: $0.folder, isDirectory: true).appendingPathComponent("UserData", isDirectory: true) }
+        func userData(_ spaces: [Space]) -> [URL] {
+            spaces.map { URL(fileURLWithPath: $0.folder, isDirectory: true).appendingPathComponent("UserData", isDirectory: true) }
+        }
+        let spaces = apps.filter { $0.kind == .claude }.flatMap(\.spaces)
+        let all = userData(spaces), idle = userData(spaces.filter { running[$0.id] == nil })
         return Task.detached(priority: .background) {
             Housekeeping.pruneBackups(in: backups, now: now)
             Housekeeping.pruneCaches(userData: idle, now: now)
+            Housekeeping.shareIdenticalFiles(userData: all, idle: idle, now: now)
         }
     }
 

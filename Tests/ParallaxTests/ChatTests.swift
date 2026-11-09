@@ -58,6 +58,22 @@ final class ChatTests: ChatFixture {
         XCTAssertEqual(try ClaudeChats.prepare(chat: after[0], target: b, spaces: [a, b]).kind, .upToDate)
     }
 
+    func testCarriedCopiesInDifferentSpacesShareTheirDiskBlocks() throws {
+        let a = space("A"), b = space("B"), c = space("C")
+        try writeNativeChat(in: a, lines: [line("user", "hi"), line("assistant", "hello")], lastActivity: 100)
+        _ = try namespace(b)
+        _ = try namespace(c)
+        try ClaudeChats.apply(transfer(to: b, spaces: [a, b, c]), backups: backups)
+        try ClaudeChats.apply(transfer(to: c, spaces: [a, b, c]), backups: backups)
+
+        // A's own file keeps its session ids, so B's copy differs from it; C's copy equals B's and is cloned from it.
+        XCTAssertNotEqual(try Data(contentsOf: native(a)), try Data(contentsOf: native(b)))
+        XCTAssertEqual(try Data(contentsOf: native(b)), try Data(contentsOf: native(c)))
+        XCTAssertEqual(try XCTUnwrap(Housekeeping.firstBlock(native(b))), Housekeeping.firstBlock(native(c)))
+        XCTAssertEqual(try FileManager.default.attributesOfItem(atPath: native(c).path)[.posixPermissions] as? Int, 0o600)
+        XCTAssertEqual(try transfer(to: c, spaces: [a, b, c]).kind, .upToDate)
+    }
+
     func testOlderCopyIsUpdatedAndDivergedCopyIsBackedUp() throws {
         let a = space("A")
         let b = space("B")

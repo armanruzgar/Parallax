@@ -60,8 +60,8 @@ final class HousekeepingTests: XCTestCase {
             try FileManager.default.setAttributes([.modificationDate: now - 60 * day], ofItemAtPath: url.path)
             return url
         }
-        let idle = try bundle("A", diskUsed: now - 30 * day)
-        let active = try bundle("B", diskUsed: now - 3 * day)
+        let idle = try bundle("A", diskUsed: now - 5 * day)
+        let active = try bundle("B", diskUsed: now - day)
 
         let spaces = ["A", "B"].map { root.appendingPathComponent("\($0)/UserData") }
         XCTAssertEqual(Housekeeping.pruneCaches(userData: spaces, now: now), 1)
@@ -93,5 +93,61 @@ final class HousekeepingTests: XCTestCase {
         XCTAssertEqual(after.vmImage, 0)
         XCTAssertEqual(after.chats, before.chats)
         XCTAssertTrue(FileManager.default.fileExists(atPath: space.appendingPathComponent("UserData/vm_bundles").path))
+    }
+
+    func testIdenticalFilesInClosedSpacesBecomeClonesAndOthersAreLeftAlone() throws {
+        let size = 300_000
+        func file(_ path: String, byte: UInt8, modified: Date) throws -> URL {
+            let url = root.appendingPathComponent(path)
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(repeating: byte, count: size).write(to: url)
+            try FileManager.default.setAttributes([.modificationDate: modified, .posixPermissions: 0o600], ofItemAtPath: url.path)
+            return url
+        }
+        let old = now - 10 * day
+        let open = try file("A/UserData/ClaudeConfig/projects/-p/chat.jsonl", byte: 1, modified: old)
+        let same = try file("B/UserData/ClaudeConfig/projects/-p/chat.jsonl", byte: 1, modified: old)
+        let staged = try file("C/UserData/claude-code-sessions/a/o/imported-staging/x/chat.jsonl", byte: 1, modified: old)
+        let different = try file("B/UserData/ClaudeConfig/projects/-p/other.jsonl", byte: 2, modified: old)
+        let fresh = try file("C/UserData/ClaudeConfig/projects/-p/chat.jsonl", byte: 1, modified: now - 60)
+        let elsewhere = try file("B/UserData/Cache/chat.jsonl", byte: 1, modified: old)
+        let small = root.appendingPathComponent("B/UserData/ClaudeConfig/projects/-p/small.jsonl")
+        try Data([1]).write(to: small)
+
+        let spaces = ["A", "B", "C"].map { root.appendingPathComponent("\($0)/UserData") }
+        let freed = Housekeeping.shareIdenticalFiles(userData: spaces, idle: Array(spaces.dropFirst()), now: now)
+
+        XCTAssertEqual(freed, Int64(2 * size))
+        let original = try XCTUnwrap(Housekeeping.firstBlock(open))
+        XCTAssertEqual(Housekeeping.firstBlock(same), original)
+        XCTAssertEqual(Housekeeping.firstBlock(staged), original)
+        XCTAssertNotEqual(Housekeeping.firstBlock(different), original)
+        XCTAssertNotEqual(Housekeeping.firstBlock(fresh), original, "A file changed in the last hour may still be being written")
+        XCTAssertNotEqual(Housekeeping.firstBlock(elsewhere), original, "Only the listed folders are touched")
+        for url in [same, staged] {
+            XCTAssertEqual(try Data(contentsOf: url), Data(repeating: 1, count: size))
+            let attributes = try FileManager.default.attributesOfItem(atPath: url.path)
+            XCTAssertEqual(attributes[.posixPermissions] as? Int, 0o600)
+            XCTAssertEqual(attributes[.modificationDate] as? Date, old)
+        }
+        XCTAssertEqual(try Data(contentsOf: different), Data(repeating: 2, count: size))
+        let leftovers = try FileManager.default.subpathsOfDirectory(atPath: root.path).filter { $0.hasSuffix(".tmp") }
+        XCTAssertEqual(leftovers, [])
+        // Nothing left to do the second time.
+        XCTAssertEqual(Housekeeping.shareIdenticalFiles(userData: spaces, idle: Array(spaces.dropFirst()), now: now), 0)
+    }
+
+    func testFilesInOpenSpacesAreNeverReplaced() throws {
+        func file(_ space: String) throws -> URL {
+            let url = root.appendingPathComponent("\(space)/UserData/claude-code/1.0/claude")
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Data(repeating: 9, count: 300_000).write(to: url)
+            try FileManager.default.setAttributes([.modificationDate: now - 10 * day], ofItemAtPath: url.path)
+            return url
+        }
+        let a = try file("A"), b = try file("B")
+        let spaces = ["A", "B"].map { root.appendingPathComponent("\($0)/UserData") }
+        XCTAssertEqual(Housekeeping.shareIdenticalFiles(userData: spaces, idle: [], now: now), 0)
+        XCTAssertNotEqual(Housekeeping.firstBlock(a), Housekeeping.firstBlock(b))
     }
 }

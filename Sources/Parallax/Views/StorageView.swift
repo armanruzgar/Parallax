@@ -12,7 +12,7 @@ struct StorageView: View {
                 HStack(alignment: .firstTextBaseline) {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Storage").font(.largeTitle.weight(.semibold))
-                        Text("Every 6 hours, Parallax deletes chat backups older than 14 days, and VM images and simulator builds that a closed Claude space hasn't used in 14 days.")
+                        Text("Every 6 hours, Parallax deletes chat backups older than 14 days, and, for closed Claude spaces, VM images unused for 3 days and simulator builds unused for 14. Files that are the same in several spaces are stored once.")
                             .foregroundStyle(.secondary)
                     }
                     Spacer()

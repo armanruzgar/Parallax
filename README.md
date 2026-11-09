@@ -106,7 +106,9 @@ Everything lives in `~/Library/Application Support/Parallax/`:
 | `ChatBackups/` | Chat files saved before Parallax replaced, deleted or archived them. Deleted after 14 days |
 | `ChatSyncCache.json` | Which chats are already up to date; safe to delete |
 
-When Parallax starts, and every 6 hours while it's open, it also deletes caches that Claude spaces haven't used in 14 days: iOS simulator builds (`UserData/simulator-builds`) and the Claude VM image (`UserData/vm_bundles`, about 10 GB, which Claude downloads again the next time the space needs it). Spaces that are open are skipped.
+When Parallax starts, and every 6 hours while it's open, it also deletes caches that Claude spaces have stopped using: iOS simulator builds (`UserData/simulator-builds`) after 14 days, and the Claude VM image (`UserData/vm_bundles`, about 11 GB, which Claude downloads again the next time the space needs it) after 3 days. Spaces that are open are skipped.
+
+The same cleanup stores files that are identical in several spaces only once: carried chats, their staged copies, and the Claude Code builds each space downloads. In a closed space, such a file is replaced with an APFS clone of the other space's copy, which shares its disk blocks until one of them changes. Finder and the Storage page still count every clone in full.
 
 The **Storage** page shows how much each space uses (VM image, chats, build caches, other), lets you remove a space's VM image right away, and has **Clean Up Now** to run the cleanup without waiting.
 
