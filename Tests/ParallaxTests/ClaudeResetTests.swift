@@ -9,6 +9,64 @@ final class ClaudeResetTests: XCTestCase {
         ClaudeResets.parse(try JSONSerialization.data(withJSONObject: ["cedar_ember": ["eligible": true, "grants": grants]]), now: now)
     }
 
+    func testCLIVersion() {
+        for version in ["2.1.309", "2.1", "2.1.3.4"] {
+            XCTAssertEqual(ClaudeResets.cliVersion(fromVersionOutput: data(version + " (Claude Code)\n")), version)
+        }
+        XCTAssertEqual(ClaudeResets.cliVersion(fromVersionOutput: data("2.1 beta")), "2.1")
+        for output in ["garbage", "", "2", "2.1.3.4.5", "2.1-beta", "2.1x"] {
+            XCTAssertNil(ClaudeResets.cliVersion(fromVersionOutput: data(output)))
+        }
+    }
+
+    func testRequest() {
+        let request = ClaudeResets.request(token: "synthetic", cliVersion: "2.1.309")
+        XCTAssertEqual(request.url?.absoluteString, "https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1")
+        XCTAssertEqual(request.httpMethod, "GET")
+        XCTAssertEqual(request.timeoutInterval, 15)
+        let headers = ["Authorization": "Bearer synthetic", "anthropic-beta": "oauth-2025-04-20",
+                       "Accept": "application/json", "x-app": "cli", "User-Agent": "claude-cli/2.1.309 (external, cli)"]
+        XCTAssertEqual(request.allHTTPHeaderFields?.count, headers.count)
+        for (name, value) in headers {
+            XCTAssertEqual(request.value(forHTTPHeaderField: name), value)
+        }
+    }
+
+    func testClaudeCodeGrantResponse() throws {
+        let fixture = data(#"""
+        {"cedar_ember": {"eligible": true, "ineligible_reason": null, "at_limit": true, "exhausted": ["seven_day_overage_included"],
+         "grants": [
+          {"id": "full-reset-2611", "label": "One full limit reset (November 2026)", "resets_total": 1, "resets_left": 1,
+           "starts_at": "2026-11-10T21:30:00+00:00", "ends_at": "2026-12-10T22:00:00+00:00", "clears": ["seven_day", "seven_day_overage_included"],
+           "paused": false, "usable_now": true, "use_requires_limit": false, "percent_used": {"seven_day": 94}, "blocking": [], "arm": null,
+           "type": "weekly", "unavailable_reason": null, "gives_back_weekly": false},
+          {"id": "free_reset_oct_2026", "label": "Free limit reset", "resets_total": 1, "resets_left": 1,
+           "starts_at": "2026-10-21T00:45:00+00:00", "ends_at": "2026-12-16T04:59:00+00:00", "clears": ["seven_day", "seven_day_overage_included"],
+           "paused": false, "usable_now": true, "use_requires_limit": false, "percent_used": {}, "blocking": [], "arm": null,
+           "type": "weekly", "unavailable_reason": null, "gives_back_weekly": false},
+          {"id": "launch-2610-fable", "label": "Fable reset", "resets_total": 1, "resets_left": 0,
+           "starts_at": "2026-11-09T18:00:00+00:00", "ends_at": "2027-03-09T07:59:00+00:00", "clears": ["seven_day_overage_included"],
+           "paused": false, "usable_now": false, "use_requires_limit": false, "percent_used": {}, "blocking": [], "arm": null,
+           "type": "full", "unavailable_reason": "unavailable", "gives_back_weekly": true}],
+         "next_grant_id": "full-reset-2611", "weekly_resets_at": "2026-11-16T18:00:00+00:00", "cooldown_until": null, "paused_held": false}}
+        """#)
+        let now = try XCTUnwrap(RenewalDate.parse("2026-11-10T23:00:00Z"))
+        let weekly = LimitReset(kind: "weekly reset", count: 2,
+                                expiresAt: try XCTUnwrap(RenewalDate.parse("2026-12-10T22:00:00Z")))
+        XCTAssertEqual(ClaudeResets.parse(fixture, now: now), [weekly])
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: fixture) as? [String: Any])
+        var reset = try XCTUnwrap(object["cedar_ember"] as? [String: Any])
+        var grants = try XCTUnwrap(reset["grants"] as? [[String: Any]])
+        grants[2]["resets_left"] = 1
+        grants[2]["usable_now"] = true
+        reset["grants"] = grants
+        object["cedar_ember"] = reset
+        XCTAssertEqual(ClaudeResets.parse(try JSONSerialization.data(withJSONObject: object), now: now), [
+            weekly, LimitReset(kind: "Fable reset", count: 1,
+                               expiresAt: try XCTUnwrap(RenewalDate.parse("2027-03-09T07:59:00Z")))
+        ])
+    }
+
     func testCredentialIdentity() {
         let path = "/tmp/Cafe\u{301}/ClaudeConfig"
         let folder = URL(fileURLWithPath: path)

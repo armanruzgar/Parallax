@@ -60,6 +60,26 @@ enum ClaudeResets {
         return ["5-hour reset", "weekly reset", "Fable reset", "full reset"].compactMap { grouped[$0] }
     }
 
+    static func cliVersion(fromVersionOutput data: Data) -> String? {
+        guard let output = String(data: data, encoding: .utf8),
+              let token = output.split(whereSeparator: { $0.isWhitespace }).first,
+              token.range(of: "^[0-9]+(\\.[0-9]+){1,3}$", options: .regularExpression) != nil else { return nil }
+        return String(token)
+    }
+
+    static func request(token: String, cliVersion: String) -> URLRequest {
+        let url = URL(string: "https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1")!
+        var request = URLRequest(url: url, timeoutInterval: 15)
+        request.httpMethod = "GET"
+        request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
+        request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        // The endpoint only reports reset grants to Claude Code clients.
+        request.setValue("cli", forHTTPHeaderField: "x-app")
+        request.setValue("claude-cli/" + cliVersion + " (external, cli)", forHTTPHeaderField: "User-Agent")
+        return request
+    }
+
     static func read(configFolder: URL) async -> [LimitReset]? {
         do {
             let now = Date()
@@ -70,12 +90,11 @@ enum ClaudeResets {
             let data: Data
             if let credentials, credentials.status == 0 { data = credentials.stdout }
             else { data = try Data(contentsOf: configFolder.appendingPathComponent(".credentials.json")) }
-            guard let token = accessToken(fromCredentials: data, now: now),
-                  let url = URL(string: "https://api.anthropic.com/api/oauth/usage?cedar_ember=1&skip_spend=1") else { return nil }
-            var request = URLRequest(url: url, timeoutInterval: 15)
-            request.setValue("Bearer " + token, forHTTPHeaderField: "Authorization")
-            request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
-            request.setValue("application/json", forHTTPHeaderField: "Accept")
+            guard let token = accessToken(fromCredentials: data, now: now) else { return nil }
+            let version = try await ProviderCLI.run("claude", ["--version"], environment: [:], timeout: 10)
+            guard version.status == 0,
+                  let cliVersion = cliVersion(fromVersionOutput: version.stdout) else { return nil }
+            let request = request(token: token, cliVersion: cliVersion)
             let configuration = URLSessionConfiguration.ephemeral
             configuration.timeoutIntervalForResource = 15
             let session = URLSession(configuration: configuration)
