@@ -17,7 +17,7 @@ One Mac, several Claude and Codex accounts. Parallax shows how much of each acco
 </picture>
 
 - Session and weekly limits for every Claude and Codex account, side by side.
-- Shows when a Claude account has a limit reset available.
+- Shows when a Claude or Codex account has a limit reset available.
 - Each account has its own private command-line login, separate from your app spaces.
 - Refreshes every 15 minutes, and every 5 minutes while the Usage page is open. Signed-out accounts are re-checked hourly, and an account is only marked signed out after the answer is confirmed.
 - Uses the newest `claude` and `codex` command-line tools it can find, and shows which one.

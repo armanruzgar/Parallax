@@ -76,7 +76,7 @@ enum CodexProvider {
         return (next, true)
     }
 
-    static func status(accountReply: [String: Any], limitsReply: [String: Any]) throws -> ProviderStatus {
+    static func status(accountReply: [String: Any], limitsReply: [String: Any], now: Date = Date()) throws -> ProviderStatus {
         guard let result = accountReply["result"] as? [String: Any], result.keys.contains("account") else {
             throw ProviderError.failed("Codex's account couldn't be read.")
         }
@@ -84,9 +84,31 @@ enum CodexProvider {
         var status = ProviderStatus(email: account["email"] as? String,
                                     plan: (account["planType"] as? String)?.capitalized,
                                     windows: windows(fromRateLimits: limitsReply["result"] as? [String: Any] ?? [:]))
+        if limitsReply["error"] == nil || limitsReply["error"] is NSNull {
+            status.resets = resets(fromRateLimits: limitsReply["result"] as? [String: Any] ?? [:], now: now)
+        }
         status.usageError = (limitsReply["error"] as? [String: Any])?["message"] as? String
         if status.windows.isEmpty && status.usageError == nil { status.usageError = "Codex didn't report usage limits." }
         return status
+    }
+
+    static func resets(fromRateLimits result: [String: Any], now: Date) -> [LimitReset]? {
+        guard let reset = result["rateLimitResetCredits"] as? [String: Any],
+              let number = reset["availableCount"] as? NSNumber,
+              CFGetTypeID(number) != CFBooleanGetTypeID(),
+              number.doubleValue.isFinite,
+              number.doubleValue.rounded(.towardZero) == number.doubleValue else { return nil }
+        let count = number.doubleValue
+        guard count > 0 else { return [] }
+        let expiry = (reset["credits"] as? [[String: Any]] ?? []).compactMap { credit -> Date? in
+            guard credit["status"] as? String == "available",
+                  let expiry = credit["expiresAt"] as? NSNumber,
+                  CFGetTypeID(expiry) != CFBooleanGetTypeID(),
+                  expiry.doubleValue > now.timeIntervalSince1970,
+                  expiry.doubleValue < 32_503_680_000 else { return nil }
+            return Date(timeIntervalSince1970: expiry.doubleValue)
+        }.min()
+        return [LimitReset(kind: "usage limit reset", count: Int(number.stringValue) ?? (count >= Double(Int.max) ? Int.max : Int(count)), expiresAt: expiry)]
     }
 
     /// Maps `primary`/`secondary` rate-limit windows, shortest first.

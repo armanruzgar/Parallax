@@ -167,7 +167,7 @@ private struct AccountCard: View {
                 Label("\(kind) available\(count)\(expiry)", systemImage: "arrow.counterclockwise.circle")
                     .font(.caption)
                     .foregroundStyle(.green)
-                    .help("Use it in Claude Code with /limit-reset.")
+                    .help(account.provider == .claude ? "Use it in Claude Code with /limit-reset." : "Use it in Codex with /usage.")
             }
 
             if let error = account.lastError {
