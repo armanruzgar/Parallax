@@ -779,6 +779,7 @@ final class AppModel {
         }
         if status.usageError == nil {
             accounts[index].windows = status.windows
+            accounts[index].resets = status.resets
             accounts[index].lastRefreshed = now()
         }
         accounts[index].lastError = status.usageError

@@ -17,6 +17,7 @@ One Mac, several Claude and Codex accounts. Parallax shows how much of each acco
 </picture>
 
 - Session and weekly limits for every Claude and Codex account, side by side.
+- Shows when a Claude account has a limit reset available.
 - Each account has its own private command-line login, separate from your app spaces.
 - Refreshes every 15 minutes, and every 5 minutes while the Usage page is open. Signed-out accounts are re-checked hourly, and an account is only marked signed out after the answer is confirmed.
 - Uses the newest `claude` and `codex` command-line tools it can find, and shows which one.
@@ -128,7 +129,7 @@ The **Storage** page shows how much each space uses (VM image, chats, build cach
 - Only Claude **Code** chats can move between accounts. Regular Claude chats live on Anthropic's servers under each account.
 - Parallax doesn't copy Codex chats between separate Codex windows. Codex keeps its chat list in its own databases, so the shared history is the reliable way to keep Codex chats together.
 - Deleted, archived, SSH and WSL chats, and routine runs, aren't carried over automatically.
-- Carry-over reads Claude Desktop's own chat files, and usage reads the providers' command-line output. Neither format is a public API, so an update to Claude or a CLI can stop them working until Parallax is updated. When that happens, Parallax reports it and leaves your files alone.
+- Carry-over reads Claude Desktop's own chat files, and usage reads the providers' command-line output. The reset check reads Anthropic's usage endpoint with the account's own CLI login. These formats and the endpoint aren't public APIs, so an update to Claude or a CLI can stop them working until Parallax is updated. When that happens, Parallax reports it and leaves your files alone.
 - Spaces are separate data folders, not a security boundary between accounts. Copying a chat into another account copies its content, so keep work and personal accounts apart if your organization requires it, and use your accounts as the providers' terms allow.
 - A locally built app is signed ad hoc. To share it with others, sign it with a Developer ID and notarize it.
 

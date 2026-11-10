@@ -102,9 +102,7 @@ private struct AccountCard: View {
             let calendar = Calendar.current
             let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: now), to: calendar.startOfDay(for: renewal.date)).day ?? 0
             let relative = days == 0 ? "today" : days == 1 ? "in 1 day" : "in \(days) days"
-            let format = Date.FormatStyle().month(.abbreviated).day()
-            let sameYear = calendar.component(.year, from: now) == calendar.component(.year, from: renewal.date)
-            let date = renewal.date.formatted(sameYear ? format : format.year())
+            let date = formattedDate(renewal.date, now: now)
             let help = !renewal.estimated ? "End of the current paid period, from Codex's sign-in."
                 : account.provider == .claude ? "Estimated from when the subscription started, assuming monthly billing."
                 : "Estimated from the last paid period Codex reported, assuming monthly billing."
@@ -113,6 +111,12 @@ private struct AccountCard: View {
                 .foregroundStyle(.secondary)
                 .help(help)
         }
+    }
+
+    private func formattedDate(_ date: Date, now: Date) -> String {
+        let format = Date.FormatStyle().month(.abbreviated).day()
+        let sameYear = Calendar.current.component(.year, from: now) == Calendar.current.component(.year, from: date)
+        return date.formatted(sameYear ? format : format.year())
     }
 
     var body: some View {
@@ -153,6 +157,17 @@ private struct AccountCard: View {
                 Text("No usage read yet.").foregroundStyle(.secondary)
             } else {
                 ForEach(account.windows, id: \.title) { UsageBar(window: $0) }
+            }
+
+            let now = Date()
+            ForEach(account.availableResets(at: now), id: \.kind) { reset in
+                let kind = reset.kind.prefix(1).uppercased() + reset.kind.dropFirst()
+                let count = reset.count > 1 ? " · \(reset.count) left" : ""
+                let expiry = reset.expiresAt.map { " · use by \(formattedDate($0, now: now))" } ?? ""
+                Label("\(kind) available\(count)\(expiry)", systemImage: "arrow.counterclockwise.circle")
+                    .font(.caption)
+                    .foregroundStyle(.green)
+                    .help("Use it in Claude Code with /limit-reset.")
             }
 
             if let error = account.lastError {

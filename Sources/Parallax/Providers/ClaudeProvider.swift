@@ -8,6 +8,7 @@ struct ProviderStatus: Sendable, Equatable {
     var usageError: String?
     var renewsAt: Date? = nil
     var renewalEstimated = false
+    var resets: [LimitReset]? = nil
 }
 
 /// Reads Claude usage through the `claude` CLI, signed in to a private config folder.
@@ -31,6 +32,7 @@ enum ClaudeProvider {
     static func status(
         configFolder: URL,
         run: Runner = { try await ProviderCLI.run($0, $1, environment: $2, timeout: $3) },
+        readResets: @Sendable (URL) async -> [LimitReset]? = { await ClaudeResets.read(configFolder: $0) },
         confirmDelay: Duration = .seconds(2)
     ) async throws -> ProviderStatus {
         let auth = try await run(
@@ -55,6 +57,8 @@ enum ClaudeProvider {
             )
             guard usage.status == 0 else { throw ProviderError.failed("Claude didn't report usage.") }
             status.windows = try parseUsage(usage.stdout)
+            status.resets = await readResets(configFolder)
+            try Task.checkCancellation()
         } catch is CancellationError {
             throw CancellationError()
         } catch {

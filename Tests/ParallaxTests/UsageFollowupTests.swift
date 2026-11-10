@@ -125,7 +125,7 @@ final class UsageFollowupTests: ChatFixture {
             XCTAssertEqual(environment["CLAUDE_CONFIG_DIR"], expected)
             let json = arguments.first == "auth" ? #"{"loggedIn":true}"# : #"{"result":"Current session: 4% used"}"#
             return CLIResult(status: 0, stdout: Data(json.utf8), stderr: Data())
-        }, confirmDelay: .zero)
+        }, readResets: { _ in nil }, confirmDelay: .zero)
         XCTAssertEqual(status.renewsAt, ISO8601DateFormatter().date(from: "2999-03-05T14:22:10Z"))
         XCTAssertTrue(status.renewalEstimated)
     }

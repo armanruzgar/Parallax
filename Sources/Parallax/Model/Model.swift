@@ -35,6 +35,12 @@ enum AppKind: String, Codable, CaseIterable, Sendable {
     }
 }
 
+struct LimitReset: Codable, Hashable, Sendable {
+    var kind: String
+    var count: Int
+    var expiresAt: Date?
+}
+
 // New stored properties must be Optional (or decoded with decodeIfPresent): an undecodable state.json hides every space.
 struct ManagedApp: Codable, Identifiable, Hashable, Sendable {
     var id = UUID()
@@ -116,6 +122,12 @@ struct UsageAccount: Codable, Identifiable, Hashable, Sendable {
     var signedIn = false
     var renewsAt: Date?
     var renewalEstimated: Bool?
+    var resets: [LimitReset]?
+
+    func availableResets(at now: Date) -> [LimitReset] {
+        guard signedIn else { return [] }
+        return (resets ?? []).filter { $0.expiresAt.map { $0 > now } ?? true }
+    }
 
     func renewal(at now: Date) -> (date: Date, estimated: Bool)? {
         guard signedIn, let renewsAt else { return nil }

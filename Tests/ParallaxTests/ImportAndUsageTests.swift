@@ -441,7 +441,7 @@ final class ClaudeStatusTests: XCTestCase {
             result(#"{"loggedIn":true,"email":"test@example.com","subscriptionType":"max"}"#),
             result(#"{"result":"Current session: 6% used"}"#),
         ])
-        let status = try await ClaudeProvider.status(configFolder: folder, run: { try await runner.run($0, $1, $2, $3) }, confirmDelay: .zero)
+        let status = try await ClaudeProvider.status(configFolder: folder, run: { try await runner.run($0, $1, $2, $3) }, readResets: { _ in nil }, confirmDelay: .zero)
         XCTAssertEqual(status.email, "test@example.com")
         XCTAssertEqual(status.plan, "Max")
         XCTAssertEqual(status.windows, [UsageWindow(title: "Session", percent: 6)])
@@ -461,7 +461,7 @@ final class ClaudeStatusTests: XCTestCase {
         let runner = ScriptedClaudeRunner([result(#"{"loggedIn":false}"#, status: 1), result(#"{"loggedIn":false}"#, status: 1)])
         do {
             _ = try await ClaudeProvider.status(configFolder: FileManager.default.temporaryDirectory,
-                                                run: { try await runner.run($0, $1, $2, $3) }, confirmDelay: .zero)
+                                                run: { try await runner.run($0, $1, $2, $3) }, readResets: { _ in nil }, confirmDelay: .zero)
             XCTFail("Expected a confirmed sign-out")
         } catch {
             XCTAssertEqual(error as? ProviderError, .signedOut)
@@ -475,7 +475,7 @@ final class ClaudeStatusTests: XCTestCase {
             let runner = ScriptedClaudeRunner(prefix + [result("not JSON", status: 1)])
             do {
                 _ = try await ClaudeProvider.status(configFolder: FileManager.default.temporaryDirectory,
-                                                    run: { try await runner.run($0, $1, $2, $3) }, confirmDelay: .zero)
+                                                    run: { try await runner.run($0, $1, $2, $3) }, readResets: { _ in nil }, confirmDelay: .zero)
                 XCTFail("Expected unreadable status")
             } catch {
                 XCTAssertEqual(error as? ProviderError, .failed("Claude's sign-in status couldn't be read."))
@@ -492,7 +492,7 @@ final class ClaudeStatusTests: XCTestCase {
             result(#"{"result":"Total cost: $0.00"}"#),
         ])
         let status = try await ClaudeProvider.status(configFolder: FileManager.default.temporaryDirectory,
-                                                    run: { try await runner.run($0, $1, $2, $3) }, confirmDelay: .zero)
+                                                    run: { try await runner.run($0, $1, $2, $3) }, readResets: { _ in nil }, confirmDelay: .zero)
         XCTAssertEqual(status.plan, "Pro")
         XCTAssertEqual(status.usageError, "Claude answered without plan limits, so this account's login may have ended. Sign in again if this keeps happening.")
         let calls = await runner.calls
