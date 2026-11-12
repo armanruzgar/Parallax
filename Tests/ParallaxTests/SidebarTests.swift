@@ -31,6 +31,122 @@ final class SidebarTests: ChatFixture {
         XCTAssertFalse(backupNames.contains { $0.contains("-sidebar-") })
     }
 
+    private func writeConfig(_ space: ClaudeChats.SpaceFolders, prefs: [String: Any], modified: Double) throws {
+        let url = ClaudeChats.desktopConfig(space)
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let object: [String: Any] = ["coworkUserFilesPath": "/kept", "preferences": ["sidebarMode": "epitaxy", "epitaxyPrefs": prefs]]
+        try JSONSerialization.data(withJSONObject: object).write(to: url)
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: modified)], ofItemAtPath: url.path)
+    }
+
+    private func prefs(_ space: ClaudeChats.SpaceFolders) throws -> [String: Any] {
+        let object = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(contentsOf: ClaudeChats.desktopConfig(space))) as? [String: Any])
+        XCTAssertEqual(object["coworkUserFilesPath"] as? String, "/kept")
+        XCTAssertEqual((object["preferences"] as? [String: Any])?["sidebarMode"] as? String, "epitaxy")
+        return try XCTUnwrap((object["preferences"] as? [String: Any])?["epitaxyPrefs"] as? [String: Any])
+    }
+
+    private func groupScope(_ space: ClaudeChats.SpaceFolders, _ account: String) throws -> [String: Any] {
+        try XCTUnwrap((prefs(space)["dframe-group-scopes"] as? [String: Any])?[account] as? [String: Any])
+    }
+
+    private func filed(_ chat: String, in group: String, name: String = "FLOW") -> [String: Any] {
+        ["groups": [["id": group, "name": name, "mode": "code"]], "assignments": ["code:" + chat: group], "order": [group: ["code:" + chat]]]
+    }
+
+    private func sidebarBackups() -> [String] {
+        ((try? FileManager.default.contentsOfDirectory(atPath: backups.path)) ?? []).filter { $0.contains("-sidebar-") }
+    }
+
+    func testCarriedChatJoinsTheGroupWithTheSameName() throws {
+        let a = space("A"), b = space("B")
+        try writeNativeChat(in: a, lines: [line("user", "one")], lastActivity: 100)
+        _ = try namespace(b, account: "acctB", org: "orgB")
+        try writeConfig(a, prefs: ["dframe-group-scopes": ["acct/org": filed(chatID, in: "cg-a")]], modified: 2_000)
+        // B's own FLOW has no chats yet, so Claude lists it only as a sidebar section.
+        let sections = ["acctB/orgB": ["sections": [["id": "sessions", "kind": "sessions"], ["id": "cg-b", "kind": "manual", "name": " flow"]]]]
+        try writeConfig(b, prefs: [
+            "dframe-group-scopes": ["acctB/orgB": filed("local_other", in: "cg-other", name: "other"), "old/scope": ["groups": []]],
+            "dframe-code-sections": sections,
+            "fastMode": true,
+        ], modified: 1_000)
+        let before = try Data(contentsOf: ClaudeChats.desktopConfig(b))
+
+        let result = ClaudeChats.syncAll(to: b, spaces: [a, b], backups: backups)
+
+        XCTAssertTrue(result.issues.isEmpty, "\(result.issues)")
+        XCTAssertEqual(result.transferred, 1)
+        XCTAssertEqual(result.grouped, 1)
+        let scope = try groupScope(b, "acctB/orgB")
+        XCTAssertEqual(scope["assignments"] as? NSDictionary,
+                       ["code:local_other": "cg-other", "code:" + chatID: "cg-b"] as NSDictionary)
+        XCTAssertEqual(scope["order"] as? NSDictionary,
+                       ["cg-other": ["code:local_other"], "cg-b": ["code:" + chatID]] as NSDictionary)
+        XCTAssertEqual(scope["groups"] as? NSArray, [["id": "cg-other", "name": "other", "mode": "code"],
+                                                     ["id": "cg-b", "name": " flow", "mode": "code"]] as NSArray)
+        let carried = try prefs(b)
+        XCTAssertEqual(carried["fastMode"] as? Bool, true)
+        XCTAssertEqual(carried["dframe-code-sections"] as? NSDictionary, sections as NSDictionary)
+        XCTAssertEqual((carried["dframe-group-scopes"] as? [String: Any])?["old/scope"] as? NSDictionary, ["groups": []] as NSDictionary)
+        let saved = sidebarBackups()
+        XCTAssertEqual(saved.count, 1)
+        XCTAssertEqual(try Data(contentsOf: backups.appendingPathComponent(saved[0]).appendingPathComponent("claude_desktop_config.json")), before)
+
+        let again = ClaudeChats.syncAll(to: b, spaces: [a, b], backups: backups)
+        XCTAssertTrue(again.issues.isEmpty, "\(again.issues)")
+        XCTAssertEqual(again.grouped, 0)
+        XCTAssertEqual(sidebarBackups().count, 1)
+    }
+
+    func testGroupComesFromTheSpaceUsedLast() throws {
+        let a = space("A"), b = space("B"), c = space("C")
+        for space in [a, b, c] { try writeNativeChat(in: space, lines: [line("user", "one")], lastActivity: 100) }
+        try writeConfig(a, prefs: ["dframe-group-scopes": ["acct/org": filed(chatID, in: "cg-a")]], modified: 1_000)
+        try writeConfig(b, prefs: ["dframe-code-sections": ["acct/org": ["sections": [["id": "cg-b", "kind": "manual", "name": "FLOW"]]]]],
+                        modified: 500)
+        try writeConfig(c, prefs: ["dframe-code-sections": ["acct/org": ["sections": [["id": "cg-c", "kind": "manual", "name": "FLOW"]]]]],
+                        modified: 3_000)
+
+        var result = ClaudeChats.syncAll(to: b, spaces: [a, b, c], backups: backups)
+        XCTAssertTrue(result.issues.isEmpty, "\(result.issues)")
+        XCTAssertEqual(result.transferred, 0)
+        XCTAssertEqual(result.grouped, 0, "The space used last keeps the chat outside its groups")
+        XCTAssertNil(try prefs(b)["dframe-group-scopes"])
+
+        try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 100)],
+                                              ofItemAtPath: ClaudeChats.desktopConfig(c).path)
+        result = ClaudeChats.syncAll(to: b, spaces: [a, b, c], backups: backups)
+        XCTAssertTrue(result.issues.isEmpty, "\(result.issues)")
+        XCTAssertEqual(result.transferred, 0, "Filing a chat needs no new messages")
+        XCTAssertEqual(result.grouped, 1)
+        XCTAssertEqual(try groupScope(b, "acct/org")["assignments"] as? NSDictionary, ["code:" + chatID: "cg-b"] as NSDictionary)
+    }
+
+    func testTargetGroupsAreNeitherChangedNorMade() throws {
+        let a = space("A"), b = space("B")
+        for space in [a, b] { try writeNativeChat(in: space, lines: [line("user", "one")], lastActivity: 100) }
+        try writeConfig(a, prefs: ["dframe-group-scopes": ["acct/org": filed(chatID, in: "cg-a")]], modified: 2_000)
+        // Claude keeps its own choice of group, so a chat filed elsewhere in B is left there.
+        var own = filed(chatID, in: "cg-mine", name: "mine")
+        own["groups"] = [["id": "cg-b", "name": "FLOW", "mode": "code"], ["id": "cg-mine", "name": "mine", "mode": "code"]]
+        try writeConfig(b, prefs: ["dframe-group-scopes": ["acct/org": own]], modified: 1_000)
+        let kept = try Data(contentsOf: ClaudeChats.desktopConfig(b))
+        var result = ClaudeChats.syncAll(to: b, spaces: [a, b], backups: backups)
+        XCTAssertTrue(result.issues.isEmpty, "\(result.issues)")
+        XCTAssertEqual(result.grouped, 0)
+        XCTAssertEqual(try Data(contentsOf: ClaudeChats.desktopConfig(b)), kept)
+
+        // B has no group with that name, and groups belong to the account, so none is made.
+        try writeConfig(b, prefs: ["dframe-code-sections": ["acct/org": ["sections": [["id": "cg-mine", "kind": "manual", "name": "mine"]]]]],
+                        modified: 1_000)
+        let unchanged = try Data(contentsOf: ClaudeChats.desktopConfig(b))
+        result = ClaudeChats.syncAll(to: b, spaces: [a, b], backups: backups)
+        XCTAssertTrue(result.issues.isEmpty, "\(result.issues)")
+        XCTAssertEqual(result.grouped, 0)
+        XCTAssertEqual(try Data(contentsOf: ClaudeChats.desktopConfig(b)), unchanged)
+        XCTAssertTrue(sidebarBackups().isEmpty)
+    }
+
     func testActivityTimeCatchesUpWhenMessagesMatch() throws {
         let a = space("A"), b = space("B")
         try writeNativeChat(in: a, lines: [line("user", "one")], lastActivity: 500)

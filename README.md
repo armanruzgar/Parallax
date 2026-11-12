@@ -53,7 +53,8 @@ A space is a separate copy of an app with its own sign-in and data. Open as many
 - **Continue a specific chat:** pick it on the Chats page and choose **Continue Here** next to the space you want.
 - **Signed out:** a space whose sign-in ended still gets your chats when you open it. Sign back in with the same account and they're there.
 - **Deleted chats:** delete a chat in one space and it's deleted in your other spaces too, the next time each one opens through Parallax. A chat that was used again after you deleted it is kept.
-- **Sidebar order:** every chat keeps the newest time Claude's sidebar sorts by (its last turn, or its last activity before Claude recorded turns), so the list is in the same order in every space. Claude keeps each account's sidebar groups, sections, pins and folder order itself and syncs them through that Claude account, so Parallax doesn't copy them; make a group once in each space.
+- **Sidebar order:** every chat keeps the newest time Claude's sidebar sorts by (its last turn, or its last activity before Claude recorded turns), so the list is in the same order in every space.
+- **Sidebar groups:** Claude keeps each account's groups, sections, pins and folder order itself, so make a group once in each space, with the same name. When Parallax carries chats into a space, a chat that has no group there joins the group with the same name it's in, in the space you used most recently that has the chat. Taking a chat out of a group, or moving it to another group, stays in the space where you did it.
 - **Archived chats:** archiving works the same way: archive a chat in one space and it's archived in your other spaces the next time each one opens through Parallax, unless it was used again after you archived it. Unarchiving stays in the space where you did it.
 
 **Codex.** Codex can switch accounts inside the app, so Parallax keeps one chat history for all Codex accounts. This is on by default for a newly added Codex app. Codex opens with all your chats in `~/.codex`; when an account runs out, switch accounts inside Codex and keep going in the same chat. Turn **One chat history for all Codex accounts** off on the Codex app page to give each account its own Codex window instead; chats then stay with the account that started them.
@@ -104,7 +105,7 @@ Everything lives in `~/Library/Application Support/Parallax/`:
 | `state.backup.json` | A copy of `state.json` from before the last removal |
 | `Profiles/` | Each space's data folder, including its sign-in |
 | `AccountSessions/` | Private command-line logins used only to read usage |
-| `ChatBackups/` | Chat files saved before Parallax replaced, deleted or archived them. Deleted after 14 days |
+| `ChatBackups/` | Chat files saved before Parallax replaced, deleted or archived them, and each space's Claude settings file from before Parallax filed chats under its groups. Deleted after 14 days |
 | `ChatSyncCache.json` | Which chats are already up to date; safe to delete |
 
 When Parallax starts, and every 6 hours while it's open, it also deletes caches that Claude spaces have stopped using: iOS simulator builds (`UserData/simulator-builds`) after 14 days, and the Claude VM image (`UserData/vm_bundles`, about 11 GB, which Claude downloads again the next time the space needs it) after 3 days. Spaces that are open are skipped.

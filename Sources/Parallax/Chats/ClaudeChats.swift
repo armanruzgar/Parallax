@@ -244,6 +244,7 @@ enum ClaudeChats {
         var transferred = 0
         var deleted = 0
         var archived = 0
+        var grouped = 0
         var notes: [String] = []
         var issues: [String] = []
         var checked = 0
@@ -816,6 +817,10 @@ enum ClaudeChats {
             if batch.stopped { result.stopped = true; break }
         }
         if result.transferred > 0 { removeUnusedStaging(in: targetNamespace, space: target) }
+        if !result.stopped {
+            do { result.grouped = try carryGroups(to: target, namespace: targetNamespace, chats: chats, spaces: spaces, backups: backups) }
+            catch { result.issues.append("Chats couldn't be filed under their sidebar groups: \(error.localizedDescription)") }
+        }
         return result
     }
 
@@ -1405,6 +1410,116 @@ enum ClaudeChats {
             try? FileManager.default.removeItem(at: temporary)
             throw POSIXError(POSIXErrorCode(rawValue: code) ?? .EIO)
         }
+    }
+
+    // MARK: Sidebar groups
+
+    /// Claude keeps the group each local chat is filed under only in that space, in `dframe-group-scopes` of
+    /// `claude_desktop_config.json`, keyed by `<account>/<organization>`. The groups themselves belong to the account,
+    /// so the same group has a different id in each account. At launch Claude adds the file's memberships for chats it
+    /// has no group for and drops those naming a group the account lacks, so membership can be added but not changed.
+    private static let groupScopes = "dframe-group-scopes"
+    private static let codeSections = "dframe-code-sections"
+
+    static func desktopConfig(_ space: SpaceFolders) -> URL {
+        space.sessions.deletingLastPathComponent().appendingPathComponent("claude_desktop_config.json")
+    }
+
+    private static func jsonFile(_ url: URL) -> [String: Any]? {
+        guard fileType(url) == S_IFREG, let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+    }
+
+    private static func sidebarPrefs(_ object: [String: Any]?) -> [String: Any]? {
+        (object?["preferences"] as? [String: Any])?["epitaxyPrefs"] as? [String: Any]
+    }
+
+    private static func scope(_ prefs: [String: Any], _ key: String, _ account: String) -> [String: Any]? {
+        (prefs[key] as? [String: Any])?[account] as? [String: Any]
+    }
+
+    /// An account's Code groups. Claude lists a group without chats only among the sidebar sections.
+    private static func codeGroups(_ prefs: [String: Any], scope account: String) -> [(id: String, name: String)] {
+        let listed = (scope(prefs, groupScopes, account)?["groups"] as? [Any] ?? []).compactMap { $0 as? [String: Any] }
+            .filter { ($0["mode"] as? String ?? "code") == "code" }
+        let sections = (scope(prefs, codeSections, account)?["sections"] as? [Any] ?? []).compactMap { $0 as? [String: Any] }
+            .filter { $0["kind"] as? String == "manual" }
+        var groups: [(id: String, name: String)] = []
+        for group in listed + sections {
+            guard let id = group["id"] as? String, let name = group["name"] as? String,
+                  !groups.contains(where: { $0.id == id }) else { continue }
+            groups.append((id, name))
+        }
+        return groups
+    }
+
+    private static func sameGroupName(_ a: String, _ b: String) -> Bool {
+        a.trimmingCharacters(in: .whitespacesAndNewlines).caseInsensitiveCompare(b.trimmingCharacters(in: .whitespacesAndNewlines)) == .orderedSame
+    }
+
+    /// Files each chat in `namespace` that has no group there under the target account's group with the same name as its
+    /// group in the most recently used other space holding it. A chat that space keeps ungrouped stays ungrouped.
+    /// The target's Claude must be stopped. Its settings file is saved in the backups first. Returns the chats filed.
+    static func carryGroups(to target: SpaceFolders, namespace: URL, chats: [Chat], spaces: [SpaceFolders],
+                            backups: URL, now: Date = Date()) throws -> Int {
+        let url = desktopConfig(target)
+        guard var object = jsonFile(url), var preferences = object["preferences"] as? [String: Any],
+              var prefs = preferences["epitaxyPrefs"] as? [String: Any] else { return 0 }
+        let scopeName = namespace.deletingLastPathComponent().lastPathComponent + "/" + namespace.lastPathComponent
+        let targetGroups = codeGroups(prefs, scope: scopeName)
+        guard !targetGroups.isEmpty else { return 0 }
+        var own = scope(prefs, groupScopes, scopeName) ?? [:]
+        var assignments = own["assignments"] as? [String: Any] ?? [:]
+        var order = own["order"] as? [String: Any] ?? [:]
+        var listed = own["groups"] as? [Any] ?? []
+        // Claude rewrites its settings while it runs, so the newest file belongs to the space used last.
+        let targetPath = AppModel.resolvedPath(url.path)
+        var sources: [UUID: (prefs: [String: Any], modified: Date)] = [:]
+        for space in spaces where space.spaceID != target.spaceID {
+            let file = desktopConfig(space)
+            guard AppModel.resolvedPath(file.path) != targetPath, let prefs = sidebarPrefs(jsonFile(file)),
+                  let modified = (try? file.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate
+            else { continue }
+            sources[space.spaceID] = (prefs, modified)
+        }
+        let present = Set(records(in: namespace, spaceID: target.spaceID).map(\.sessionID))
+        var filed = 0
+        for chat in chats where present.contains(chat.id) {
+            let key = "code:" + chat.id
+            guard assignments[key] == nil,
+                  let copy = chat.copies.filter({ sources[$0.spaceID] != nil }).max(by: {
+                      let (a, b) = (sources[$0.spaceID]!.modified, sources[$1.spaceID]!.modified)
+                      return a != b ? a < b : $0.namespace.path > $1.namespace.path
+                  }) else { continue }
+            let source = sources[copy.spaceID]!.prefs
+            let sourceScope = copy.namespace.deletingLastPathComponent().lastPathComponent + "/" + copy.namespace.lastPathComponent
+            guard let id = (scope(source, groupScopes, sourceScope)?["assignments"] as? [String: Any])?[key] as? String,
+                  let name = codeGroups(source, scope: sourceScope).first(where: { $0.id == id })?.name,
+                  let group = targetGroups.first(where: { sameGroupName($0.name, name) }) else { continue }
+            assignments[key] = group.id
+            var members = order[group.id] as? [Any] ?? []
+            if !members.contains(where: { $0 as? String == key }) { members.append(key) }
+            order[group.id] = members
+            if !listed.contains(where: { ($0 as? [String: Any])?["id"] as? String == group.id }) {
+                listed.append(["id": group.id, "name": group.name, "mode": "code"])
+            }
+            filed += 1
+        }
+        guard filed > 0 else { return 0 }
+        guard !isDefaultFolder(url) else { throw LaunchError.invalidSetting("Chat carry-over can't write to Claude's default folders.") }
+        own["groups"] = listed
+        own["assignments"] = assignments
+        own["order"] = order
+        var scopes = prefs[groupScopes] as? [String: Any] ?? [:]
+        scopes[scopeName] = own
+        prefs[groupScopes] = scopes
+        preferences["epitaxyPrefs"] = prefs
+        object["preferences"] = preferences
+        let data = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+        let folder = try backupFolder(in: backups, chatID: "sidebar", now: now)
+        try FileManager.default.copyItem(at: url, to: folder.appendingPathComponent(url.lastPathComponent))
+        try writeAtomically(data, to: url)
+        return filed
     }
 
     static func continueURL(chatID: String) -> URL? {
